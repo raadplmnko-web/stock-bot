@@ -1,89 +1,100 @@
-import os
-import requests
-import asyncio
+import os, requests, asyncio
 from flask import Flask
 from threading import Thread
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
-# --- 1. إعداد خادم ويب بسيط لمنع النوم ---
 app = Flask('')
-
 @app.route('/')
-def home():
-    return "Bot is alive and running!"
+def home(): return "Bot is alive and running!"
 
 def run():
-    # Render يتطلب الاستماع على المنفذ 10000 أو المنفذ المحدد في البيئة
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
+# قائمة المراقبة العالمية (تُحفظ في الذاكرة)
+watchlist = {}
 
-# --- 2. إعدادات البوت ---
 TOKEN = os.getenv('TOKEN')
 FINNHUB_API = os.getenv('FINNHUB_API')
-CHAT_ID = "687056332"
+MY_CHAT_ID = "687056332"
 
-def translate_to_arabic(text):
+def get_detailed_data(symbol):
     try:
-        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ar&dt=t&q={text}"
-        res = requests.get(url).json()
-        return res[0][0][0]
-    except Exception:
-        return text
-
-def get_stock_analysis(symbol):
-    try:
-        quote_url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API}"
-        profile_url = f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol}&token={FINNHUB_API}"
+        quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API}").json()
+        profile = requests.get(f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol}&token={FINNHUB_API}").json()
+        # جلب بيانات الشموع لآخر 20 يوم للزخم
+        res = requests.get(f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=D&count=20&token={FINNHUB_API}").json()
         
-        p_res = requests.get(quote_url).json()
-        prof_res = requests.get(profile_url).json()
+        current_price = quote.get('c', 0)
+        if current_price == 0: return None
         
-        price = p_res.get('c', 0)
-        if price == 0: return None
-
-        # فلتر الشرعية المبسط
-        industry = prof_res.get('finnhubIndustry', '').lower()
-        prohibited = ['banking', 'financial services', 'beverages', 'insurance']
-        is_sharia = "✅ مطابق للشريعة" if not any(s in industry for s in prohibited) else "❌ غير شرعي"
-
-        return {"price": price, "sharia": is_sharia}
-    except Exception:
-        return None
+        # حساب المتوسط البسيط لـ 20 يوم
+        prices = res.get('c', [])
+        sma_20 = sum(prices) / len(prices) if prices else current_price
+        momentum = "قوي 🚀" if current_price > sma_20 else "ضعيف 📉"
+        
+        industry = profile.get('finnhubIndustry', '').lower()
+        sharia = "✅ مطابق" if not any(x in industry for x in ['bank', 'finance', 'insur', 'bev']) else "❌ غير مطابق"
+        
+        return {
+            "price": current_price,
+            "sharia": sharia,
+            "momentum": momentum,
+            "target": round(current_price * 1.05, 2), # هدف 5%
+            "stop": round(current_price * 0.95, 2)
+        }
+    except: return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: return
+    text = update.message.text.strip().upper()
+    chat_id = str(update.message.chat_id)
     
-    symbol = update.message.text.upper().strip()
-    wait_msg = await update.message.reply_text(f"🔍 فحص {symbol}...")
-    
-    data = get_stock_analysis(symbol)
-    if not data:
-        await wait_msg.edit_text("❌ رمز السهم غير صحيح أو لا توجد بيانات.")
+    # 1. حالة المراقبة
+    if "راقب" in text:
+        symbol = text.replace("راقب", "").strip().upper()
+        data = get_detailed_data(symbol)
+        if data:
+            watchlist[symbol] = {"target": data['target'], "chat_id": chat_id}
+            await update.message.reply_text(f"🎯 تم تفعيل الرادار لـ {symbol}\nسأقوم بتنبيهك عند وصول السعر لـ {data['target']}$")
         return
 
-    message = (f"📊 **تحليل سهم: {symbol}**\n"
-               f"━━━━━━━━━━━━\n"
-               f"📜 **الشرعية:** {data['sharia']}\n"
-               f"💰 **السعر الحالي:** {data['price']}$\n"
-               f"🚀 **الهدف المتوقع:** {round(data['price']*1.07, 2)}$\n"
-               f"🚫 **وقف الخسارة:** {round(data['price']*0.94, 2)}$\n"
-               f"━━━━━━━━━━━━")
-    await wait_msg.edit_text(message, parse_mode='Markdown')
+    # 2. حالة تحليل الزخم والإيجابية
+    if any(x in text for x in ["زخم", "إيجابي"]):
+        symbol = text.split()[0]
+        data = get_detailed_data(symbol)
+        if data:
+            await update.message.reply_text(f"📊 تحليل {symbol}:\nالزخم: {data['momentum']}\nالحالة: {'إيجابي جداً ✅' if data['momentum'] == 'قوي 🚀' else 'سلبي ⚠️'}")
+        return
 
-# --- 3. تشغيل البوت ---
+    # 3. تحليل السهم العادي
+    data = get_detailed_data(text)
+    if data:
+        msg = (f"🍎 سهم: {text}\n"
+               f"💰 السعر: {data['price']}$\n"
+               f"📜 الشرعية: {data['sharia']}\n"
+               f"🚀 الهدف: {data['target']}$\n"
+               f"📉 الوقف: {data['stop']}$")
+        await update.message.reply_text(msg)
+
+# وظيفة فحص الأهداف تلقائياً كل دقيقة
+async def check_targets(application):
+    while True:
+        for symbol, info in list(watchlist.items()):
+            data = get_detailed_data(symbol)
+            if data and data['price'] >= info['target']:
+                await application.bot.send_message(chat_id=info['chat_id'], text=f"🔔 تنبيه: سهم {symbol} حقق الهدف الأول {data['price']}$! 🤑")
+                del watchlist[symbol]
+        await asyncio.sleep(60)
+
 if __name__ == '__main__':
-    # تشغيل خادم منع النوم أولاً
-    keep_alive()
-    
-    # بناء وتطبيق البوت
+    Thread(target=run).start()
     if TOKEN:
-        application = Application.builder().token(TOKEN).build()
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.run_polling()
-    else:
-        print("Error: No TOKEN found in environment variables.")
+        app_tg = Application.builder().token(TOKEN).build()
+        app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        # تشغيل فحص الأهداف في الخلفية
+        loop = asyncio.get_event_loop()
+        loop.create_task(check_targets(app_tg))
+        
+        app_tg.run_polling()
