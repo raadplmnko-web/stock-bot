@@ -1,42 +1,25 @@
- import os, requests, asyncio, pytz
+import os, requests, asyncio, pytz
 from flask import Flask
 from threading import Thread
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 
-# ================== Flask لإبقاء البوت حي ==================
+# ================== Flask لإبقاء البوت حياً ==================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot is alive and running!"
+def home(): return "البوت يعمل بنجاح!"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# ================== المتغيرات ==================
+# ================== الإعدادات ==================
 TOKEN = os.getenv('TOKEN')
 FINNHUB_API = os.getenv('FINNHUB_API')
 CHAT_ID = os.getenv('CHAT_ID')
 
-# ================== التحقق من وقت السوق الأمريكي ==================
-def market_is_open():
-    ny = pytz.timezone("America/New_York")
-    now = datetime.now(ny)
-    if now.weekday() >= 5: return False
-    open_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_time = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return open_time <= now <= close_time
-
-# ================== ترجمة الأخبار ==================
-def translate_to_arabic(text):
-    try:
-        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ar&dt=t&q={text}"
-        res = requests.get(url).json()
-        return res[0][0][0]
-    except: return "لا توجد تفاصيل إضافية"
-
-# ================== التحليل الكامل ==================
+# ================== جلب البيانات والتحليل ==================
 def get_full_analysis(symbol):
     try:
         quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API}").json()
@@ -68,36 +51,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"📜 **الشرعية:** {data['sharia']}")
         await update.message.reply_text(msg, parse_mode='Markdown')
 
-# ================== الماسح التلقائي (طريقة Render المستقرة) ==================
-async def daily_opportunities(application: Application):
-    while True:
-        try:
-            if market_is_open() and CHAT_ID:
-                # محاكاة البحث عن فرصة (مثال: AAPL)
-                data = get_full_analysis("AAPL")
-                if data:
-                    message = f"🚀 **فرصة رادار الآن:**\nسهم {data['symbol']} بسعر {data['price']}$"
-                    await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-        except Exception as e: print(f"Error in task: {e}")
-        await asyncio.sleep(1800)
-
 # ================== تشغيل البوت ==================
-async def main():
+async def start_bot():
     if not TOKEN: return
     application = Application.builder().token(TOKEN).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # تشغيل الماسح في الخلفية بشكل صحيح
-    asyncio.create_task(daily_opportunities(application))
     
     async with application:
         await application.initialize()
         await application.start()
         await application.updater.start_polling()
+        # لإبقاء المهمة تعمل في بيئة Render
         while True: await asyncio.sleep(1)
 
 if __name__ == '__main__':
     Thread(target=run).start()
     try:
-        asyncio.run(main())
+        asyncio.run(start_bot())
     except KeyboardInterrupt: pass
