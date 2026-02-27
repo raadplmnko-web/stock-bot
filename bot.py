@@ -1,73 +1,66 @@
-import os, requests, asyncio
+import os, requests
 from flask import Flask
 from threading import Thread
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
-# --- 1. خادم ويب بسيط ---
+# 1. تشغيل السيرفر لضمان بقاء البوت حياً
 app = Flask('')
 @app.route('/')
-def home(): return "Bot is running!"
+def home(): return "البوت يعمل بنجاح!"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. الإعدادات ---
+# 2. إعدادات المفاتيح
 TOKEN = os.getenv('TOKEN')
 FINNHUB_API = os.getenv('FINNHUB_API')
-watchlist = {}
 
-# --- 3. جلب بيانات السهم ---
-def get_stock_data(symbol):
+# 3. دالة جلب البيانات والتحليل المباشر
+def get_analysis(symbol):
     try:
-        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API}"
-        res = requests.get(url).json()
-        return res.get('c', 0)
-    except: return 0
+        # جلب السعر الحالي
+        res = requests.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API}").json()
+        price = res.get('c', 0)
+        if price == 0: return None
+        
+        # تحليل بسيط للاتجاه
+        change = res.get('d', 0)
+        status = "📈 صاعد" if change > 0 else "📉 هابط"
+        
+        return {
+            "price": price,
+            "status": status,
+            "target": round(price * 1.05, 2)
+        }
+    except: return None
 
-# --- 4. معالج الرسائل ---
+# 4. الرد على الرسائل
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    text = update.message.text.strip().upper()
-    chat_id = update.message.chat_id
-
-    if text == "قائمتي":
-        msg = "📋 نراقب حالياً:\n" + "\n".join(list(watchlist.keys())) if watchlist else "القائمة فارغة."
-        await update.message.reply_text(msg)
-        return
-
-    price = get_stock_data(text)
-    if price > 0:
-        target = round(price * 1.05, 2)
-        watchlist[text] = {"target": target, "chat_id": chat_id}
-        res = f"🍎 سهم {text}\n💰 السعر الحالي: {price}$\n🎯 الهدف التلقائي: {target}$\n✅ تم تفعيل الرادار لهذا السهم."
-        await update.message.reply_text(res)
+    
+    symbol = update.message.text.strip().upper()
+    data = get_analysis(symbol)
+    
+    if data:
+        msg = (f"🍎 **سهم: {symbol}**\n"
+               f"━━━━━━━━━━━━\n"
+               f"💰 **السعر:** {data['price']}$\n"
+               f"📊 **الحالة:** {data['status']}\n"
+               f"🎯 **هدف الـ 5%:** {data['target']}$")
+        await update.message.reply_text(msg, parse_mode='Markdown')
     else:
-        await update.message.reply_text("❌ لم أتمكن من العثور على السهم. تأكد من الرمز (مثلاً: AAPL)")
+        await update.message.reply_text("❌ لم أجد بيانات لهذا الرمز، تأكد من كتابته بشكل صحيح (مثلاً: TSLA)")
 
-# --- 5. وظيفة الرادار ---
-async def monitor_stocks(application):
-    while True:
-        for symbol, info in list(watchlist.items()):
-            current = get_stock_data(symbol)
-            if current >= info['target']:
-                await application.bot.send_message(chat_id=info['chat_id'], text=f"🔔 تنبيه: {symbol} وصل لهدفه {current}$!")
-                del watchlist[symbol]
-        await asyncio.sleep(60)
-
-# --- 6. التشغيل ---
-def main():
-    if not TOKEN: return
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # تشغيل الرادار في الخلفية
-    loop = asyncio.get_event_loop()
-    loop.create_task(monitor_stocks(application))
-    
-    application.run_polling()
-
+# 5. تشغيل البوت
 if __name__ == '__main__':
+    # تشغيل خادم الويب في الخلفية
     Thread(target=run).start()
-    main()
+    
+    # تشغيل تليجرام
+    if TOKEN:
+        application = Application.builder().token(TOKEN).build()
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        print("جاري بدء تشغيل البوت...")
+        application.run_polling()
