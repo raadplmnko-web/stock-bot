@@ -1,4 +1,9 @@
-import os, requests, asyncio, pytz
+# bot.py
+
+import os
+import requests
+import asyncio
+import pytz
 from flask import Flask
 from threading import Thread
 from telegram import Update
@@ -39,13 +44,11 @@ def translate_to_arabic(text):
     except:
         return "لا توجد تفاصيل إضافية"
 
-# ================== جلب أفضل الأسهم اليوم ==================
+# ================== جلب أفضل الأسهم ==================
 def get_top_gainers():
-    # Finnhub لا يعطي مباشرة top gainers، سنستخدم قائمة S&P500 مؤقتاً
-    # يمكنك لاحقاً ربط Screener API احترافي
     url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={FINNHUB_API}"
     all_stocks = requests.get(url).json()
-    return [s['symbol'] for s in all_stocks if s['type'] == 'Common Stock']
+    return [s['symbol'] for s in all_stocks if s.get('type') == 'Common Stock']
 
 # ================== التحليل الكامل ==================
 def get_full_analysis(symbol):
@@ -135,8 +138,7 @@ async def daily_opportunities(application):
                         f"━━━━━━━━━━━━\n"
                     )
 
-                for symbol, info in watchlist.items():
-                    await application.bot.send_message(chat_id=info["chat_id"], text=message)
+                await application.bot.send_message(chat_id=os.getenv('CHAT_ID'), text=message)
 
         await asyncio.sleep(1800)  # كل 30 دقيقة
 
@@ -149,4 +151,4 @@ if __name__ == '__main__':
         app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         loop = asyncio.get_event_loop()
         loop.create_task(daily_opportunities(app_tg))
-        app_tg.run_polling()
+        app_tg.run_polling() 
