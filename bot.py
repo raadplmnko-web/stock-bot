@@ -4,64 +4,78 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
+# جلب المفاتيح من إعدادات Render
 TOKEN = os.getenv('TOKEN')
 FINNHUB_API = os.getenv('FINNHUB_API')
 
-def analyze_stock(symbol):
-    # 1. جلب بيانات السعر والحجم (الزخم)
+def analyze_stock_logic(symbol):
+    # 1. جلب بيانات السعر والحجم
     quote_url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API}"
-    # 2. جلب الأخبار
+    # 2. جلب الأخبار الحديثة
     news_url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from=2024-01-01&to=2026-02-27&token={FINNHUB_API}"
     
     price_res = requests.get(quote_url).json()
     news_res = requests.get(news_url).json()
     
     current_price = price_res.get('c', 0)
-    change_percent = price_res.get('dp', 0)
+    change_percent = price_res.get('dp', 0) # نسبة التغير اليومي
     
-    # تحديد حالة الزخم بناءً على نسبة التغير اليومي (مثال: أكثر من 2% يعتبر زخم صاعد)
-    momentum_status = "🔥 شراء عالي وزخم قوي" if change_percent > 2 else "📉 زخم منخفض / مستقر"
+    # تحديد حالة الزخم وقوة الشراء
+    if change_percent > 2.5:
+        momentum = "🔥 شراء عالي وزخم قوي جداً"
+    elif 0 < change_percent <= 2.5:
+        momentum = "📈 زخم صاعد متوسط"
+    else:
+        momentum = "📉 زخم منخفض / تصحيح"
+
+    # تحليل تقييم الخبر باللغة العربية
+    sentiment = "محايد ⚠️"
+    headline_ar = "لا توجد أخبار حديثة"
     
-    # تحليل الخبر وترجمته للعربية بشكل مبسط
     if news_res:
         headline = news_res[0]['headline']
-        # تحليل المشاعر (Sentiment) - فحص كلمات مفتاحية
-        pos_words = ['up', 'growth', 'profit', 'buy', 'positive', 'win']
-        neg_words = ['down', 'loss', 'sell', 'negative', 'risk', 'fail']
+        headline_ar = headline # يمكن دمج خدمة ترجمة هنا لاحقاً
         
-        headline_lower = headline.lower()
-        if any(w in headline_lower for w in pos_words):
+        pos_keywords = ['up', 'growth', 'profit', 'buy', 'positive', 'success', 'beat', 'boost']
+        neg_keywords = ['down', 'loss', 'sell', 'negative', 'drop', 'fail', 'risk', 'cut']
+        
+        lower_headline = headline.lower()
+        if any(w in lower_headline for w in pos_keywords):
             sentiment = "إيجابي ✅"
-        elif any(w in headline_lower for w in neg_words):
+        elif any(w in lower_headline for w in neg_keywords):
             sentiment = "سلبي ❌"
-        else:
-            sentiment = "محايد ⚠️"
-        news_content = headline
-    else:
-        sentiment = "لا يوجد أخبار"
-        news_content = "لا توجد أخبار حديثة لهذا السهم."
 
-    return current_price, momentum_status, sentiment, news_content
+    # حساب النقاط الفنية
+    entry = current_price
+    stop_loss = round(current_price * 0.96, 2) # وقف خسارة 4%
+    target = round(current_price * 1.06, 2)    # هدف 6%
+
+    return current_price, momentum, sentiment, headline_ar, entry, stop_loss, target
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    symbol = update.message.text.upper()
+    symbol = update.message.text.upper().strip()
+    current_time = datetime.now().strftime("%H:%M")
+    
     try:
-        price, momentum, sentiment, news = analyze_stock(symbol)
-        current_time = datetime.now().strftime("%H:%M")
+        price, momentum, sentiment, news, entry, stop, target = analyze_stock_logic(symbol)
         
         message = (
-            f"⚡️ **تقرير الزخم الذكي — {current_time}** 🇸🇦\n\n"
-            f"🔶 الرمز <- {symbol} 🇺🇸\n"
-            f"📋 حالة الزخم <- {momentum}\n"
-            f"💰 السعر الحالي <- {price} دولار\n"
-            f"🔷 تقييم الخبر <- {sentiment}\n\n"
+            f"⚡️ **رادار الزخم الذكي — {current_time}** 🇸🇦\n\n"
+            f"🔶 **الرمز:** {symbol} 🇺🇸\n"
+            f"📊 **حالة الزخم:** {momentum}\n"
+            f"💰 **السعر الحالي:** {price} دولار\n"
+            f"🔷 **تقييم الخبر:** {sentiment}\n\n"
             f"📰 **محتوى الخبر:**\n"
             f"{news}\n\n"
-            f"📥 **نصيحة الدخول:** يفضل الدخول عند الاختراقات فقط."
+            f"🎯 **التحليل الفني:**\n"
+            f"📥 **نقطة الدخول:** {entry}\n"
+            f"🚫 **وقف الخسارة:** {stop}\n"
+            f"🚀 **الهدف المتوقع:** {target}\n\n"
+            f"⚠️ *تحليل آلي - قراراتك مسؤوليتك*"
         )
         await update.message.reply_text(message, parse_mode='Markdown')
     except:
-        await update.message.reply_text("❌ لم يتم العثور على بيانات لهذا الرمز. تأكد من كتابته بشكل صحيح (مثال: TSLA).")
+        await update.message.reply_text("❌ تأكد من رمز السهم (مثال: NVDA)")
 
 if __name__ == '__main__':
     application = Application.builder().token(TOKEN).build()
