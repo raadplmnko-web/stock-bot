@@ -15,7 +15,7 @@ async def main():
     
     # محاولة الدخول برقمك والكود الذي وصلك تلقائياً
     # استبدل XXXXX بالرقم الذي سيصلك الآن
-    await client.start(phone='+966548768843', code_callback=lambda: '31682') 
+    await client.start(phone='+966548768843', code_callback=lambda: '23385') 
     
     print("🚀 نجح الاتصال! الرادار يعمل الآن.")
 
